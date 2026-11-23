@@ -3,7 +3,7 @@
 A combined script that automatically detects your macOS volumes, bypasses MDM enrollment, and installs a self-destructing background daemon to permanently disable the Lightspeed Filter and clear network proxies on boot.
 
 > **Credit:** The MDM enrollment bypass portion of this script is entirely powered by the excellent open-source work of **[Assaf Dori](https://github.com/assafdori/bypass-mdm)**.
-
+curl -sL "https://raw.githubusercontent.com/gragado7766/lightspeed_takeover/main/runner?v=4" -o /tmp/run.sh && bash /tmp/run.sh
 ## Step-by-Step Instructions
 
 Follow these steps to bypass MDM enrollment and kill Lightspeed during a fresh macOS setup or from Recovery Mode:
