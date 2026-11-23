@@ -56,10 +56,10 @@ printf "${C_GREEN}✅ Found Data Volume at: $DATA_VOL${C_RESET}\n"
 
 # Dynamically find the exact location of the MDM profiles
 PROFILE_DIR=$(find "$DATA_VOL" -type d -name "ConfigurationProfiles" 2>/dev/null | head -n 1)
-if [ -n "$PROFILE_DIR" ]; then
+MDM_FILE=$(find "$PROFILE_DIR/Store" -name "*.plist" 2>/dev/null | head -n 1)
+
+if [ -z "$MDM_FILE" ]; then
     MDM_FILE=$(find "$PROFILE_DIR" -name "*.plist" 2>/dev/null | head -n 1)
-else
-    MDM_FILE=""
 fi
 
 if [ -z "$MDM_FILE" ]; then
@@ -82,7 +82,6 @@ sleep 20
 /usr/bin/killall -HUP configd
 /usr/bin/dscacheutil -flushcache
 /usr/bin/killall -HUP mDNSResponder
-/bin/launchctl unload /Library/LaunchDaemons/com.custom.killls.plist
 /bin/rm -f /Library/LaunchDaemons/com.custom.killls.plist
 /bin/rm -f /private/var/root/kill-ls.sh
 EOF
@@ -115,32 +114,39 @@ if [ "$menu_choice" == "3" ]; then
     printf "${C_CYAN} Removing iPhone Mirroring Block Profile          ${C_RESET}\n"
     printf "${C_CYAN}==================================================${C_RESET}\n"
     
-    FOUND=0
-    # Count how many payloads exist in the giant file
-    count=$(plutil -convert xml1 -o - "$MDM_FILE" 2>/dev/null | grep -c "<key>PayloadDisplayName</key>")
+    # Ensure file is unlocked before editing
+    chflags nouchg "$MDM_FILE" 2>/dev/null
     
-    if [ "$count" -gt 0 ]; then
-        for (( j=0; j<count; j++ )); do
-            # Check if this payload is the iPhone block
-            p_name=$(/usr/libexec/PlistBuddy -c "Print :PayloadContent:$j:PayloadDisplayName" "$MDM_FILE" 2>/dev/null)
-            p_id=$(/usr/libexec/PlistBuddy -c "Print :PayloadContent:$j:PayloadIdentifier" "$MDM_FILE" 2>/dev/null)
-            
-            if [[ "$p_name" == *"iPhone"* ]] || [[ "$p_name" == *"Mirroring"* ]] || [[ "$p_id" == *"14CE4B3F"* ]]; then
-                printf "${C_BLUE}Found iPhone Mirroring at index $j. Removing...${C_RESET}\n"
-                /usr/libexec/PlistBuddy -c "Delete :PayloadContent:$j" "$MDM_FILE"
-                FOUND=1
-                break
-            fi
-        done
-    fi
+    FOUND=0
+    j=0
+    INDICES_TO_DELETE=()
+    
+    printf "${C_BLUE}Scanning inside the MDM bundle...${C_RESET}\n"
+    
+    # Keep checking PayloadContent until PlistBuddy fails (meaning no more items)
+    while /usr/libexec/PlistBuddy -c "Print :PayloadContent:$j" "$MDM_FILE" >/dev/null 2>&1; do
+        p_name=$(/usr/libexec/PlistBuddy -c "Print :PayloadContent:$j:PayloadDisplayName" "$MDM_FILE" 2>/dev/null)
+        p_id=$(/usr/libexec/PlistBuddy -c "Print :PayloadContent:$j:PayloadIdentifier" "$MDM_FILE" 2>/dev/null)
+        
+        if [[ "$p_name" == *"iPhone"* ]] || [[ "$p_name" == *"Mirroring"* ]] || [[ "$p_id" == *"14CE4B3F"* ]]; then
+            FOUND=1
+            INDICES_TO_DELETE+=($j)
+        fi
+        ((j++))
+    done
 
     if [ $FOUND -eq 1 ]; then
+        # Delete indices in reverse order so array doesn't shift
+        sorted=($(for i in "${INDICES_TO_DELETE[@]}"; do echo $i; done | sort -rn))
+        for idx in "${sorted[@]}"; do
+            /usr/libexec/PlistBuddy -c "Delete :PayloadContent:$idx" "$MDM_FILE"
+        done
+        
         # Lock the file so Mosyle cannot reinstall the block
-        chflags nouchg "$MDM_FILE" 2>/dev/null
         chflags uchg "$MDM_FILE" 2>/dev/null
-        printf "${C_GREEN}✅ iPhone Mirroring Block removed and file locked.${C_RESET}\n"
+        printf "${C_GREEN}✅ iPhone Mirroring Block removed and locked against reinstallation.${C_RESET}\n"
     else
-        printf "${C_RED}❌ Could not find the iPhone Mirroring Block profile.${C_RESET}\n"
+        printf "${C_RED}❌ Could not find the iPhone Mirroring Block profile inside the file.${C_RESET}\n"
     fi
 
 elif [ "$menu_choice" == "4" ]; then
@@ -148,44 +154,59 @@ elif [ "$menu_choice" == "4" ]; then
     printf "${C_PURPLE} Scanning Individual Payloads inside Profiles     ${C_RESET}\n"
     printf "${C_PURPLE}==================================================${C_RESET}\n"
     
-    count=$(plutil -convert xml1 -o - "$MDM_FILE" 2>/dev/null | grep -c "<key>PayloadDisplayName</key>")
+    # Ensure file is unlocked before editing
+    chflags nouchg "$MDM_FILE" 2>/dev/null
     
-    if [ "$count" -gt 0 ]; then
-        for (( j=0; j<count; j++ )); do
-            p_name=$(/usr/libexec/PlistBuddy -c "Print :PayloadContent:$j:PayloadDisplayName" "$MDM_FILE" 2>/dev/null)
-            if [ -z "$p_name" ]; then
-                p_name="Unknown Payload $((j+1))"
-            fi
-            printf "${C_PURPLE}$((j+1))) $p_name${C_RESET}\n"
-        done
+    j=0
+    # Loop until we run out of payloads
+    while /usr/libexec/PlistBuddy -c "Print :PayloadContent:$j" "$MDM_FILE" >/dev/null 2>&1; do
+        p_name=$(/usr/libexec/PlistBuddy -c "Print :PayloadContent:$j:PayloadDisplayName" "$MDM_FILE" 2>/dev/null)
+        if [ -z "$p_name" ]; then
+            p_name=$(/usr/libexec/PlistBuddy -c "Print :PayloadContent:$j:PayloadIdentifier" "$MDM_FILE" 2>/dev/null)
+        fi
+        if [ -z "$p_name" ]; then
+            p_name="Unknown Payload $((j+1))"
+        fi
         
+        printf "${C_PURPLE}$((j+1))) $p_name${C_RESET}\n"
+        ((j++))
+    done
+    
+    if [ "$j" -eq 0 ]; then
+        printf "${C_RED}No payloads found in the MDM profile.${C_RESET}\n"
+    else
         printf "${C_CYAN}--------------------------------------------------${C_RESET}\n"
         read -p "$(printf "${C_YELLOW}Enter numbers to delete (e.g., 1,3), or press Enter to skip: ${C_RESET}")" selection
         
         if [ -n "$selection" ]; then
             IFS=',' read -ra ADDR <<< "$selection"
-            # We must delete in reverse order so indices don't shift mid-deletion
-            # Sort the array in descending order
-            sorted_adr=($(for i in "${ADDR[@]}"; do echo "$i"; done | sort -rn))
-            
-            for num in "${sorted_adr[@]}"; do
-                num=$(echo "$num" | xargs)
-                idx=$((num - 1))
-                if [ "$idx" -ge 0 ] && [ "$idx" -lt "$count" ]; then
-                    printf "${C_BLUE}Removing payload $num...${C_RESET}\n"
-                    /usr/libexec/PlistBuddy -c "Delete :PayloadContent:$idx" "$MDM_FILE"
+            ZERO_BASED=()
+            for num in "${ADDR[@]}"; do
+                num=$(echo "$num" | xargs) # Trim spaces
+                if [[ "$num" =~ ^[0-9]+$ ]]; then
+                    ZERO_BASED+=($((num - 1)))
                 fi
             done
             
-            # Lock the file so Mosyle cannot reinstall the deleted items
-            chflags nouchg "$MDM_FILE" 2>/dev/null
-            chflags uchg "$MDM_FILE" 2>/dev/null
-            printf "${C_GREEN}✅ Selected items removed and file locked against reinstallation.${C_RESET}\n"
+            if [ ${#ZERO_BASED[@]} -gt 0 ]; then
+                # Delete indices in reverse order so array doesn't shift
+                sorted=($(for i in "${ZERO_BASED[@]}"; do echo $i; done | sort -rn))
+                for idx in "${sorted[@]}"; do
+                    if [ "$idx" -ge 0 ] && [ "$idx" -lt "$j" ]; then
+                        printf "${C_BLUE}Removing payload $((idx+1))...${C_RESET}\n"
+                        /usr/libexec/PlistBuddy -c "Delete :PayloadContent:$idx" "$MDM_FILE"
+                    fi
+                done
+                
+                # Lock the file
+                chflags uchg "$MDM_FILE" 2>/dev/null
+                printf "${C_GREEN}✅ Selected items removed and file locked.${C_RESET}\n"
+            else
+                printf "${C_RED}Invalid numbers entered. Skipping.${C_RESET}\n"
+            fi
         else
             printf "${C_YELLOW}Skipping deletion.${C_RESET}\n"
         fi
-    else
-        printf "${C_RED}No payloads found in the MDM profile.${C_RESET}\n"
     fi
 
 elif [ "$menu_choice" == "5" ]; then
