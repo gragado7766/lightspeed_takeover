@@ -90,8 +90,14 @@ if [ "$menu_choice" == "3" ]; then
     echo "=================================================="
     echo " Removing iPhone Mirroring Block Profile          "
     echo "=================================================="
-    rm -f "$DATA_VOL/private/var/db/ConfigurationProfiles/Store/14CE4B3F-F58A-4BEA-93C9-0F5917F9D083.plist"
-    echo "✅ iPhone Mirroring Block profile removed."
+    PROFILE_UUID="14CE4B3F-F58A-4BEA-93C9-0F5917F9D083"
+    echo "Hunting down profile files..."
+    
+    # Aggressively find and delete the profile anywhere in the ConfigurationProfiles folder
+    find "$DATA_VOL/private/var/db/ConfigurationProfiles" -name "*${PROFILE_UUID}*" -exec rm -rf {} + 2>/dev/null
+    
+    echo "✅ iPhone Mirroring Block profile files removed."
+    
 elif [ "$menu_choice" == "4" ]; then
     echo "=================================================="
     echo " Scanning Custom Management Profiles              "
@@ -142,6 +148,7 @@ elif [ "$menu_choice" == "4" ]; then
     else
         echo "Profile directory not found."
     fi
+    
 elif [ "$menu_choice" == "5" ]; then
     echo "=================================================="
     echo " ☢️ Erasure (Nuclear Option)                       "
