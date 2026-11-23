@@ -1,16 +1,35 @@
 #!/bin/bash
 
 echo "=================================================="
+echo "   Lightspeed Takeover & MDM Bypass Menu          "
+echo "=================================================="
+echo "1) Stop and Exit"
+echo "2) Bypass MDM + Kill Lightspeed"
+echo "3) Bypass MDM + Kill Lightspeed + Remove iPhone Mirroring Block"
+echo "4) Bypass MDM + Kill Lightspeed + Custom Profile Remover (Advanced User Caution)"
+echo "5) Erasure (Nuclear Option - removes all profiles)"
+echo "=================================================="
+read -p "Please enter your choice [1-5]: " menu_choice
+
+if [ "$menu_choice" == "1" ]; then
+    echo "Exiting..."
+    exit 0
+elif [[ "$menu_choice" =~ ^[2-5]$ ]]; then
+    echo "Continuing with selected option..."
+else
+    echo "Invalid choice. Exiting."
+    exit 1
+fi
+
+echo "=================================================="
 echo " 1. Installing Lightspeed Auto-Killer (Daemon)    "
 echo "=================================================="
 
 echo "Detecting Data Volume..."
-# Mount all APFS volumes to ensure the data volume is visible
 for disk in $(diskutil list | grep "APFS Volume" | grep -v "Recovery" | awk '{print $NF}'); do
     diskutil mount "$disk" >/dev/null 2>&1
 done
 
-# Automatically find the correct Data volume path
 DATA_VOL=""
 for vol in /Volumes/*; do
     if [ -d "$vol/private/var/root" ] && [ -d "$vol/Library/LaunchDaemons" ]; then
@@ -66,11 +85,77 @@ cat << 'EOF' > "$DATA_VOL/Library/LaunchDaemons/com.custom.killls.plist"
 EOF
 
 echo "✅ Auto-Killer installed successfully."
+
+if [ "$menu_choice" == "3" ]; then
+    echo "=================================================="
+    echo " Removing iPhone Mirroring Block Profile          "
+    echo "=================================================="
+    rm -f "$DATA_VOL/private/var/db/ConfigurationProfiles/Store/14CE4B3F-F58A-4BEA-93C9-0F5917F9D083.plist"
+    echo "✅ iPhone Mirroring Block profile removed."
+elif [ "$menu_choice" == "4" ]; then
+    echo "=================================================="
+    echo " Scanning Custom Management Profiles              "
+    echo "=================================================="
+    PROFILE_DIR="$DATA_VOL/private/var/db/ConfigurationProfiles/Store"
+    
+    if [ -d "$PROFILE_DIR" ]; then
+        i=1
+        declare -A profile_map
+        
+        for profile in "$PROFILE_DIR"/*.plist; do
+            if [ -f "$profile" ]; then
+                p_name=$(defaults read "$profile" ProfileDisplayName 2>/dev/null)
+                if [ -z "$p_name" ]; then
+                    p_name=$(defaults read "$profile" PayloadDisplayName 2>/dev/null)
+                fi
+                if [ -z "$p_name" ]; then
+                    p_name=$(basename "$profile" .plist)
+                fi
+                
+                echo "$i) $p_name"
+                profile_map[$i]="$profile"
+                ((i++))
+            fi
+        done
+        
+        if [ $i -eq 1 ]; then
+            echo "No profiles found."
+        else
+            echo "--------------------------------------------------"
+            read -p "Enter numbers to delete (e.g., 1,2), or press Enter to skip: " selection
+            
+            if [ -n "$selection" ]; then
+                IFS=',' read -ra ADDR <<< "$selection"
+                for num in "${ADDR[@]}"; do
+                    num=$(echo "$num" | xargs)
+                    if [ -n "${profile_map[$num]}" ]; then
+                        echo "Deleting: $(basename "${profile_map[$num]}")"
+                        rm -rf "${profile_map[$num]}"
+                    fi
+                done
+                echo "✅ Selected profiles removed."
+            else
+                echo "Skipping profile deletion."
+            fi
+        fi
+    else
+        echo "Profile directory not found."
+    fi
+elif [ "$menu_choice" == "5" ]; then
+    echo "=================================================="
+    echo " ☢️ Erasure (Nuclear Option)                       "
+    echo " Removing ALL Management Settings                 "
+    echo "=================================================="
+    rm -rf "$DATA_VOL/private/var/db/ConfigurationProfiles/"
+    mkdir -p "$DATA_VOL/private/var/db/ConfigurationProfiles/Settings"
+    touch "$DATA_VOL/private/var/db/ConfigurationProfiles/Settings/.profilesAreInstalled"
+    echo "✅ ALL management profiles and settings have been erased."
+fi
+
 echo "=================================================="
 echo " 2. Running MDM Bypass (assafdori)                "
 echo "=================================================="
 
-# Download and run the bypass script (using file execution instead of pipe)
 curl -sL https://raw.githubusercontent.com/assafdori/bypass-mdm/main/bypass-mdm-v2.sh -o /tmp/bypass-mdm.sh
 chmod +x /tmp/bypass-mdm.sh
 /tmp/bypass-mdm.sh
