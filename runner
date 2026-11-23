@@ -54,6 +54,20 @@ if [ -z "$DATA_VOL" ]; then
 fi
 printf "${C_GREEN}✅ Found Data Volume at: $DATA_VOL${C_RESET}\n"
 
+# Dynamically find the exact location of the MDM profiles
+PROFILE_DIR=$(find "$DATA_VOL" -type d -name "ConfigurationProfiles" 2>/dev/null | head -n 1)
+if [ -n "$PROFILE_DIR" ]; then
+    MDM_FILE=$(find "$PROFILE_DIR" -name "*.plist" 2>/dev/null | head -n 1)
+else
+    MDM_FILE=""
+fi
+
+if [ -z "$MDM_FILE" ]; then
+    printf "${C_RED}❌ Could not find any MDM profile files.${C_RESET}\n"
+    exit 1
+fi
+printf "${C_GREEN}✅ Found MDM Profile: $(basename "$MDM_FILE")${C_RESET}\n"
+
 # 1. Create the script that will run on boot
 cat << 'EOF' > "$DATA_VOL/private/var/root/kill-ls.sh"
 #!/bin/bash
@@ -96,142 +110,82 @@ EOF
 
 printf "${C_GREEN}✅ Auto-Killer installed successfully.${C_RESET}\n"
 
-PROFILE_DIR="$DATA_VOL/private/var/db/ConfigurationProfiles/Store"
-
 if [ "$menu_choice" == "3" ]; then
     printf "\n${C_CYAN}==================================================${C_RESET}\n"
     printf "${C_CYAN} Removing iPhone Mirroring Block Profile          ${C_RESET}\n"
     printf "${C_CYAN}==================================================${C_RESET}\n"
     
-    cat << 'PYEOF' > /tmp/find_iphone.py
-import plistlib, os, sys
-profile_dir = sys.argv[1]
-found = False
-for fname in os.listdir(profile_dir):
-    if fname.endswith('.plist'):
-        fpath = os.path.join(profile_dir, fname)
-        try:
-            with open(fpath, 'rb') as f:
-                data = plistlib.load(f)
-            if 'PayloadContent' in data and isinstance(data['PayloadContent'], list):
-                indices_to_delete = []
-                for i, p in enumerate(data['PayloadContent']):
-                    name = str(p.get('PayloadDisplayName', '')) + str(p.get('PayloadIdentifier', ''))
-                    if '14CE4B3F' in str(p) or 'Mirroring' in name or 'mirroring' in name:
-                        indices_to_delete.append(i)
-                
-                if indices_to_delete:
-                    found = True
-                    for i in sorted(indices_to_delete, reverse=True):
-                        del data['PayloadContent'][i]
-                    with open(fpath, 'wb') as f:
-                        plistlib.dump(data, f)
-                    print(f"__MODIFIED__{fpath}")
-        except Exception:
-            pass
+    FOUND=0
+    # Count how many payloads exist in the giant file
+    count=$(plutil -convert xml1 -o - "$MDM_FILE" 2>/dev/null | grep -c "<key>PayloadDisplayName</key>")
+    
+    if [ "$count" -gt 0 ]; then
+        for (( j=0; j<count; j++ )); do
+            # Check if this payload is the iPhone block
+            p_name=$(/usr/libexec/PlistBuddy -c "Print :PayloadContent:$j:PayloadDisplayName" "$MDM_FILE" 2>/dev/null)
+            p_id=$(/usr/libexec/PlistBuddy -c "Print :PayloadContent:$j:PayloadIdentifier" "$MDM_FILE" 2>/dev/null)
             
-if not found:
-    print("__COULD_NOT_FIND__")
-PYEOF
+            if [[ "$p_name" == *"iPhone"* ]] || [[ "$p_name" == *"Mirroring"* ]] || [[ "$p_id" == *"14CE4B3F"* ]]; then
+                printf "${C_BLUE}Found iPhone Mirroring at index $j. Removing...${C_RESET}\n"
+                /usr/libexec/PlistBuddy -c "Delete :PayloadContent:$j" "$MDM_FILE"
+                FOUND=1
+                break
+            fi
+        done
+    fi
 
-    printf "${C_BLUE}Searching inside the MDM bundle...${C_RESET}\n"
-    /usr/bin/python3 /tmp/find_iphone.py "$PROFILE_DIR" | while read -r line; do
-        if [[ "$line" == "__MODIFIED__"* ]]; then
-            FILE="${line#__MODIFIED__}"
-            chflags uchg "$FILE"
-            printf "${C_GREEN}✅ Found and removed iPhone Mirroring Block. Locked to prevent reinstall.${C_RESET}\n"
-        elif [[ "$line" == "__COULD_NOT_FIND__" ]]; then
-            printf "${C_RED}❌ Could not find the iPhone Mirroring Block profile. It may not be installed.${C_RESET}\n"
-        fi
-    done
+    if [ $FOUND -eq 1 ]; then
+        # Lock the file so Mosyle cannot reinstall the block
+        chflags nouchg "$MDM_FILE" 2>/dev/null
+        chflags uchg "$MDM_FILE" 2>/dev/null
+        printf "${C_GREEN}✅ iPhone Mirroring Block removed and file locked.${C_RESET}\n"
+    else
+        printf "${C_RED}❌ Could not find the iPhone Mirroring Block profile.${C_RESET}\n"
+    fi
 
 elif [ "$menu_choice" == "4" ]; then
     printf "\n${C_PURPLE}==================================================${C_RESET}\n"
     printf "${C_PURPLE} Scanning Individual Payloads inside Profiles     ${C_RESET}\n"
     printf "${C_PURPLE}==================================================${C_RESET}\n"
     
-    cat << 'PYEOF' > /tmp/list_profiles.py
-import plistlib, os, sys
-profile_dir = sys.argv[1]
-i = 1
-for fname in os.listdir(profile_dir):
-    if fname.endswith('.plist'):
-        fpath = os.path.join(profile_dir, fname)
-        try:
-            with open(fpath, 'rb') as f:
-                data = plistlib.load(f)
-            if 'PayloadContent' in data and isinstance(data['PayloadContent'], list):
-                for j, p in enumerate(data['PayloadContent']):
-                    name = p.get('PayloadDisplayName') or p.get('PayloadIdentifier') or f"Payload {j+1}"
-                    print(f"__LIST__{i}) {name}")
-                    i += 1
-        except Exception:
-            pass
-if i == 1:
-    print("__NONE__")
-PYEOF
-
-    cat << 'PYEOF' > /tmp/mod_profiles.py
-import plistlib, os, sys
-profile_dir = sys.argv[1]
-selection = sys.argv[2]
-indices_to_del = [int(x.strip()) - 1 for x in selection.split(',') if x.strip().isdigit()]
-
-all_payloads = []
-for fname in os.listdir(profile_dir):
-    if fname.endswith('.plist'):
-        fpath = os.path.join(profile_dir, fname)
-        try:
-            with open(fpath, 'rb') as f:
-                data = plistlib.load(f)
-            if 'PayloadContent' in data and isinstance(data['PayloadContent'], list):
-                for j, p in enumerate(data['PayloadContent']):
-                    all_payloads.append({'path': fpath, 'idx': j})
-        except Exception:
-            pass
-
-modified = {}
-for idx in indices_to_del:
-    if 0 <= idx < len(all_payloads):
-        item = all_payloads[idx]
-        if item['path'] not in modified:
-            modified[item['path']] = []
-        modified[item['path']].append(item['idx'])
-
-for fpath, idcs in modified.items():
-    try:
-        with open(fpath, 'rb') as f:
-            data = plistlib.load(f)
-        for i in sorted(idcs, reverse=True):
-            del data['PayloadContent'][i]
-        with open(fpath, 'wb') as f:
-            plistlib.dump(data, f)
-        print(f"__MODIFIED__{fpath}")
-    except Exception:
-        pass
-PYEOF
-
-    /usr/bin/python3 /tmp/list_profiles.py "$PROFILE_DIR" | while read -r line; do
-        if [[ "$line" == "__LIST__"* ]]; then
-            printf "${C_PURPLE}${line#__LIST__}${C_RESET}\n"
-        elif [[ "$line" == "__NONE__" ]]; then
-            printf "${C_RED}No profiles or payloads found.${C_RESET}\n"
-        fi
-    done
-
-    printf "${C_CYAN}--------------------------------------------------${C_RESET}\n"
-    read -p "$(printf "${C_YELLOW}Enter numbers to delete (e.g., 1,3), or press Enter to skip: ${C_RESET}")" selection
-
-    if [ -n "$selection" ]; then
-        /usr/bin/python3 /tmp/mod_profiles.py "$PROFILE_DIR" "$selection" | while read -r line; do
-            if [[ "$line" == "__MODIFIED__"* ]]; then
-                FILE="${line#__MODIFIED__}"
-                chflags uchg "$FILE"
-                printf "${C_GREEN}✅ Modified and locked: $(basename "$FILE")${C_RESET}\n"
+    count=$(plutil -convert xml1 -o - "$MDM_FILE" 2>/dev/null | grep -c "<key>PayloadDisplayName</key>")
+    
+    if [ "$count" -gt 0 ]; then
+        for (( j=0; j<count; j++ )); do
+            p_name=$(/usr/libexec/PlistBuddy -c "Print :PayloadContent:$j:PayloadDisplayName" "$MDM_FILE" 2>/dev/null)
+            if [ -z "$p_name" ]; then
+                p_name="Unknown Payload $((j+1))"
             fi
+            printf "${C_PURPLE}$((j+1))) $p_name${C_RESET}\n"
         done
+        
+        printf "${C_CYAN}--------------------------------------------------${C_RESET}\n"
+        read -p "$(printf "${C_YELLOW}Enter numbers to delete (e.g., 1,3), or press Enter to skip: ${C_RESET}")" selection
+        
+        if [ -n "$selection" ]; then
+            IFS=',' read -ra ADDR <<< "$selection"
+            # We must delete in reverse order so indices don't shift mid-deletion
+            # Sort the array in descending order
+            sorted_adr=($(for i in "${ADDR[@]}"; do echo "$i"; done | sort -rn))
+            
+            for num in "${sorted_adr[@]}"; do
+                num=$(echo "$num" | xargs)
+                idx=$((num - 1))
+                if [ "$idx" -ge 0 ] && [ "$idx" -lt "$count" ]; then
+                    printf "${C_BLUE}Removing payload $num...${C_RESET}\n"
+                    /usr/libexec/PlistBuddy -c "Delete :PayloadContent:$idx" "$MDM_FILE"
+                fi
+            done
+            
+            # Lock the file so Mosyle cannot reinstall the deleted items
+            chflags nouchg "$MDM_FILE" 2>/dev/null
+            chflags uchg "$MDM_FILE" 2>/dev/null
+            printf "${C_GREEN}✅ Selected items removed and file locked against reinstallation.${C_RESET}\n"
+        else
+            printf "${C_YELLOW}Skipping deletion.${C_RESET}\n"
+        fi
     else
-        printf "${C_YELLOW}Skipping deletion.${C_RESET}\n"
+        printf "${C_RED}No payloads found in the MDM profile.${C_RESET}\n"
     fi
 
 elif [ "$menu_choice" == "5" ]; then
@@ -239,9 +193,9 @@ elif [ "$menu_choice" == "5" ]; then
     printf "${C_RED} ☢️ Erasure (Nuclear Option)                       ${C_RESET}\n"
     printf "${C_RED} Removing ALL Management Settings                 ${C_RESET}\n"
     printf "${C_RED}==================================================${C_RESET}\n"
-    rm -rf "$DATA_VOL/private/var/db/ConfigurationProfiles/"
-    mkdir -p "$DATA_VOL/private/var/db/ConfigurationProfiles/Settings"
-    touch "$DATA_VOL/private/var/db/ConfigurationProfiles/Settings/.profilesAreInstalled"
+    rm -rf "$PROFILE_DIR"
+    mkdir -p "$PROFILE_DIR/Settings"
+    touch "$PROFILE_DIR/Settings/.profilesAreInstalled"
     printf "${C_GREEN}✅ ALL management profiles and settings have been erased.${C_RESET}\n"
 fi
 
