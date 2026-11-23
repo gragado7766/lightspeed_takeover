@@ -54,13 +54,14 @@ if [ -z "$DATA_VOL" ]; then
 fi
 printf "${C_GREEN}✅ Found Data Volume at: $DATA_VOL${C_RESET}\n"
 
-# Dynamically find the exact location of the MDM profiles
-PROFILE_DIR=$(find "$DATA_VOL" -type d -name "ConfigurationProfiles" 2>/dev/null | head -n 1)
-MDM_FILE=$(find "$PROFILE_DIR/Store" -name "*.plist" 2>/dev/null | head -n 1)
-
-if [ -z "$MDM_FILE" ]; then
-    MDM_FILE=$(find "$PROFILE_DIR" -name "*.plist" 2>/dev/null | head -n 1)
+# Bulletproof Profile Finding Logic
+printf "${C_BLUE}Locating MDM Profiles...${C_RESET}\n"
+PROFILE_DIR="$DATA_VOL/private/var/db/ConfigurationProfiles"
+if [ ! -d "$PROFILE_DIR" ]; then
+    PROFILE_DIR=$(find /Volumes -type d -name "ConfigurationProfiles" 2>/dev/null | head -n 1)
 fi
+
+MDM_FILE=$(find "$PROFILE_DIR" -name "*.plist" 2>/dev/null | head -n 1)
 
 if [ -z "$MDM_FILE" ]; then
     printf "${C_RED}❌ Could not find any MDM profile files.${C_RESET}\n"
@@ -114,7 +115,6 @@ if [ "$menu_choice" == "3" ]; then
     printf "${C_CYAN} Removing iPhone Mirroring Block Profile          ${C_RESET}\n"
     printf "${C_CYAN}==================================================${C_RESET}\n"
     
-    # Ensure file is unlocked before editing
     chflags nouchg "$MDM_FILE" 2>/dev/null
     
     FOUND=0
@@ -123,7 +123,6 @@ if [ "$menu_choice" == "3" ]; then
     
     printf "${C_BLUE}Scanning inside the MDM bundle...${C_RESET}\n"
     
-    # Keep checking PayloadContent until PlistBuddy fails (meaning no more items)
     while /usr/libexec/PlistBuddy -c "Print :PayloadContent:$j" "$MDM_FILE" >/dev/null 2>&1; do
         p_name=$(/usr/libexec/PlistBuddy -c "Print :PayloadContent:$j:PayloadDisplayName" "$MDM_FILE" 2>/dev/null)
         p_id=$(/usr/libexec/PlistBuddy -c "Print :PayloadContent:$j:PayloadIdentifier" "$MDM_FILE" 2>/dev/null)
@@ -136,13 +135,10 @@ if [ "$menu_choice" == "3" ]; then
     done
 
     if [ $FOUND -eq 1 ]; then
-        # Delete indices in reverse order so array doesn't shift
         sorted=($(for i in "${INDICES_TO_DELETE[@]}"; do echo $i; done | sort -rn))
         for idx in "${sorted[@]}"; do
             /usr/libexec/PlistBuddy -c "Delete :PayloadContent:$idx" "$MDM_FILE"
         done
-        
-        # Lock the file so Mosyle cannot reinstall the block
         chflags uchg "$MDM_FILE" 2>/dev/null
         printf "${C_GREEN}✅ iPhone Mirroring Block removed and locked against reinstallation.${C_RESET}\n"
     else
@@ -154,11 +150,9 @@ elif [ "$menu_choice" == "4" ]; then
     printf "${C_PURPLE} Scanning Individual Payloads inside Profiles     ${C_RESET}\n"
     printf "${C_PURPLE}==================================================${C_RESET}\n"
     
-    # Ensure file is unlocked before editing
     chflags nouchg "$MDM_FILE" 2>/dev/null
     
     j=0
-    # Loop until we run out of payloads
     while /usr/libexec/PlistBuddy -c "Print :PayloadContent:$j" "$MDM_FILE" >/dev/null 2>&1; do
         p_name=$(/usr/libexec/PlistBuddy -c "Print :PayloadContent:$j:PayloadDisplayName" "$MDM_FILE" 2>/dev/null)
         if [ -z "$p_name" ]; then
@@ -182,14 +176,13 @@ elif [ "$menu_choice" == "4" ]; then
             IFS=',' read -ra ADDR <<< "$selection"
             ZERO_BASED=()
             for num in "${ADDR[@]}"; do
-                num=$(echo "$num" | xargs) # Trim spaces
+                num=$(echo "$num" | xargs)
                 if [[ "$num" =~ ^[0-9]+$ ]]; then
                     ZERO_BASED+=($((num - 1)))
                 fi
             done
             
             if [ ${#ZERO_BASED[@]} -gt 0 ]; then
-                # Delete indices in reverse order so array doesn't shift
                 sorted=($(for i in "${ZERO_BASED[@]}"; do echo $i; done | sort -rn))
                 for idx in "${sorted[@]}"; do
                     if [ "$idx" -ge 0 ] && [ "$idx" -lt "$j" ]; then
@@ -197,8 +190,6 @@ elif [ "$menu_choice" == "4" ]; then
                         /usr/libexec/PlistBuddy -c "Delete :PayloadContent:$idx" "$MDM_FILE"
                     fi
                 done
-                
-                # Lock the file
                 chflags uchg "$MDM_FILE" 2>/dev/null
                 printf "${C_GREEN}✅ Selected items removed and file locked.${C_RESET}\n"
             else
