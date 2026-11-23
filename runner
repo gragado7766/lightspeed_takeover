@@ -92,63 +92,91 @@ if [ "$menu_choice" == "3" ]; then
     echo "=================================================="
     PROFILE_UUID="14CE4B3F-F58A-4BEA-93C9-0F5917F9D083"
     echo "Hunting down profile files..."
-    
-    # Aggressively find and delete the profile anywhere in the ConfigurationProfiles folder
     find "$DATA_VOL/private/var/db/ConfigurationProfiles" -name "*${PROFILE_UUID}*" -exec rm -rf {} + 2>/dev/null
-    
     echo "✅ iPhone Mirroring Block profile files removed."
     
 elif [ "$menu_choice" == "4" ]; then
     echo "=================================================="
-    echo " Scanning Custom Management Profiles              "
+    echo " Scanning Individual Payloads inside Profiles     "
     echo "=================================================="
     PROFILE_DIR="$DATA_VOL/private/var/db/ConfigurationProfiles/Store"
     
     if [ -d "$PROFILE_DIR" ]; then
         i=1
-        PROFILE_FILES=()
+        declare -a PLIST_FILES
+        declare -a PAYLOAD_INDICES
         
         for profile in "$PROFILE_DIR"/*.plist; do
             if [ -f "$profile" ]; then
-                p_name=$(defaults read "$profile" ProfileDisplayName 2>/dev/null)
-                if [ -z "$p_name" ]; then
-                    p_name=$(defaults read "$profile" PayloadDisplayName 2>/dev/null)
+                # Check if it has a PayloadContent array
+                if /usr/libexec/PlistBuddy -c "Print :PayloadContent" "$profile" &>/dev/null; then
+                    # Find how many payloads are in this profile
+                    count=$(/usr/libexec/PlistBuddy -c "Print :PayloadContent" "$profile" | grep -c "Dict {")
+                    
+                    for (( j=0; j<count; j++ )); do
+                        # Extract the human-readable name
+                        p_name=$(/usr/libexec/PlistBuddy -c "Print :PayloadContent:$j:PayloadDisplayName" "$profile" 2>/dev/null)
+                        if [ -z "$p_name" ]; then
+                            p_name=$(/usr/libexec/PlistBuddy -c "Print :PayloadContent:$j:PayloadIdentifier" "$profile" 2>/dev/null)
+                        fi
+                        if [ -z "$p_name" ]; then
+                            p_name=$(basename "$profile" .plist)
+                        fi
+                        
+                        echo "$i) $p_name"
+                        PLIST_FILES[$i]="$profile"
+                        PAYLOAD_INDICES[$i]="$j"
+                        ((i++))
+                    done
+                else
+                    # Fallback for standard single-payload profiles
+                    p_name=$(/usr/libexec/PlistBuddy -c "Print :ProfileDisplayName" "$profile" 2>/dev/null)
+                    if [ -z "$p_name" ]; then
+                        p_name=$(basename "$profile" .plist)
+                    fi
+                    echo "$i) $p_name"
+                    PLIST_FILES[$i]="$profile"
+                    PAYLOAD_INDICES[$i]="" # Empty means delete the whole file
+                    ((i++))
                 fi
-                if [ -z "$p_name" ]; then
-                    p_name=$(basename "$profile" .plist)
-                fi
-                
-                echo "$i) $p_name"
-                PROFILE_FILES+=("$profile")
-                ((i++))
             fi
         done
         
-        if [ ${#PROFILE_FILES[@]} -eq 0 ]; then
-            echo "No profiles found."
+        if [ $i -eq 1 ]; then
+            echo "No profiles or payloads found."
         else
             echo "--------------------------------------------------"
-            read -p "Enter numbers to delete (e.g., 1,2), or press Enter to skip: " selection
+            read -p "Enter numbers to delete (e.g., 1,3), or press Enter to skip: " selection
             
             if [ -n "$selection" ]; then
                 IFS=',' read -ra ADDR <<< "$selection"
                 for num in "${ADDR[@]}"; do
                     num=$(echo "$num" | xargs)
-                    index=$((num - 1))
-                    if [ "$index" -ge 0 ] && [ "$index" -lt "${#PROFILE_FILES[@]}" ]; then
-                        echo "Deleting: $(basename "${PROFILE_FILES[$index]}")"
-                        rm -rf "${PROFILE_FILES[$index]}"
+                    if [ -n "${PLIST_FILES[$num]}" ]; then
+                        target_file="${PLIST_FILES[$num]}"
+                        target_index="${PAYLOAD_INDICES[$num]}"
+                        
+                        if [ -z "$target_index" ]; then
+                            echo "Deleting entire profile: $(basename "$target_file")"
+                            rm -rf "$target_file"
+                        else
+                            echo "Removing payload from: $(basename "$target_file")"
+                            # Delete the specific payload index. 
+                            # NOTE: If deleting multiple from the same file, we should delete in reverse order.
+                            # For simplicity in this bash 3.2 script, we will do a direct delete.
+                            /usr/libexec/PlistBuddy -c "Delete :PayloadContent:$target_index" "$target_file"
+                        fi
                     fi
                 done
-                echo "✅ Selected profiles removed."
+                echo "✅ Selected items removed."
             else
-                echo "Skipping profile deletion."
+                echo "Skipping deletion."
             fi
         fi
     else
         echo "Profile directory not found."
     fi
-    
+
 elif [ "$menu_choice" == "5" ]; then
     echo "=================================================="
     echo " ☢️ Erasure (Nuclear Option)                       "
