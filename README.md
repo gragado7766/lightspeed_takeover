@@ -83,5 +83,3 @@ Option 5 will completely wipe all management profiles from the system.
 If your school's MDM pushes Lightspeed back to the Mac in the future, you will need to run the manual pkill commands again, as the self-destructing daemon will be gone.
 
 Special thanks to Assaf Dori for the original MDM bypass logic.
-
-text
