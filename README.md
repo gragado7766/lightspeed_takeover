@@ -34,24 +34,3 @@ Follow these steps to bypass MDM enrollment and kill Lightspeed during a fresh m
    * ✓ Auto-Killer installed successfully
    * ✓ Running MDM Bypass (assafdori)
 10. **Reboot your Mac.**
-
----
-
-### 🤖 How the Auto-Killer Works
-
-Once you reboot and log into the new admin account, a hidden background service waits 20 seconds and then executes the following:
-
-* Kills all active `lsfilter` and `mobilefilter` processes.
-* Disables the Lightspeed LaunchDaemons so they cannot restart.
-* Flushes the macOS proxy settings to restore internet access to Chrome, Steam, etc.
-* **Self-Destructs:** Deletes the daemon and script from the system so it only runs once.
-
-### ⚠️ Important Notes
-* The script works even with System Integrity Protection (SIP) enabled. 
-* If your school's MDM pushes Lightspeed back to the Mac in the future, you will need to run the manual `pkill` commands again, as the self-destructing daemon will be gone.
-```
-
-### Step 2: Commit the changes
-Click the green **"Commit changes..."** button. 
-
-Now your GitHub page will look exactly like a professional tool repository, complete with a working copy button for the command!
