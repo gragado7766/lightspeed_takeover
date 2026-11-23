@@ -99,9 +99,7 @@ printf "${C_GREEN}✅ Auto-Killer installed successfully.${C_RESET}\n"
 # Function to lock a file so MDM cannot overwrite it
 lock_profile() {
     local filepath="$1"
-    # Create an empty dummy file if it doesn't exist
     touch "$filepath"
-    # Lock the file (immutable flag)
     chflags uchg "$filepath"
 }
 
@@ -111,36 +109,28 @@ if [ "$menu_choice" == "3" ]; then
     printf "${C_CYAN}==================================================${C_RESET}\n"
     
     FOUND=0
-    PROFILE_UUID="14CE4B3F-F58A-4BEA-93C9-0F5917F9D083"
+    PROFILE_UUID="14CE4B3F"
+    PROFILE_DIR="$DATA_VOL/private/var/db/ConfigurationProfiles/Store"
     
-    printf "${C_BLUE}Searching for iPhone Mirroring restriction...${C_RESET}\n"
+    printf "${C_BLUE}Searching for iPhone Mirroring restriction inside profiles...${C_RESET}\n"
     
-    # Search by UUID first
-    UUID_PATH=$(find "$DATA_VOL/private/var/db/ConfigurationProfiles" -name "*${PROFILE_UUID}*" 2>/dev/null | head -n 1)
-    
-    if [ -n "$UUID_PATH" ]; then
-        rm -rf "$UUID_PATH"
-        lock_profile "$UUID_PATH"
-        FOUND=1
-    else
-        # Search by payload name if UUID fails
-        PROFILE_DIR="$DATA_VOL/private/var/db/ConfigurationProfiles/Store"
-        if [ -d "$PROFILE_DIR" ]; then
-            for profile in "$PROFILE_DIR"/*.plist; do
-                if [ -f "$profile" ] && /usr/libexec/PlistBuddy -c "Print" "$profile" 2>/dev/null | grep -qi "iPhone Mirroring"; then
-                    rm -rf "$profile"
-                    lock_profile "$profile"
-                    FOUND=1
-                    break
-                fi
-            done
-        fi
+    if [ -d "$PROFILE_DIR" ]; then
+        for profile in "$PROFILE_DIR"/*.plist; do
+            # Search the contents of the file for the UUID or the name
+            if grep -q "$PROFILE_UUID" "$profile" 2>/dev/null || grep -qi "iPhone Mirroring" "$profile" 2>/dev/null; then
+                printf "${C_BLUE}Found it in: $(basename "$profile")${C_RESET}\n"
+                rm -rf "$profile"
+                lock_profile "$profile"
+                FOUND=1
+                break
+            fi
+        done
     fi
 
     if [ $FOUND -eq 1 ]; then
-        printf "${C_GREEN}✅ iPhone Mirroring Block removed and locked.${C_RESET}\n"
+        printf "${C_GREEN}✅ iPhone Mirroring Block removed and locked against reinstallation.${C_RESET}\n"
     else
-        printf "${C_RED}❌ Could not find the iPhone Mirroring Block profile.${C_RESET}\n"
+        printf "${C_RED}❌ Could not find the iPhone Mirroring Block profile. It may not be installed.${C_RESET}\n"
     fi
 
 elif [ "$menu_choice" == "4" ]; then
@@ -156,16 +146,17 @@ elif [ "$menu_choice" == "4" ]; then
         
         for profile in "$PROFILE_DIR"/*.plist; do
             if [ -f "$profile" ]; then
-                if /usr/libexec/PlistBuddy -c "Print :PayloadContent" "$profile" &>/dev/null; then
-                    count=$(/usr/libexec/PlistBuddy -c "Print :PayloadContent" "$profile" | grep -c "Dict {")
-                    
+                # Convert to XML to reliably count the payloads
+                count=$(plutil -convert xml1 -o - "$profile" 2>/dev/null | grep -c "<key>PayloadDisplayName</key>")
+                
+                if [ "$count" -gt 0 ]; then
                     for (( j=0; j<count; j++ )); do
                         p_name=$(/usr/libexec/PlistBuddy -c "Print :PayloadContent:$j:PayloadDisplayName" "$profile" 2>/dev/null)
                         if [ -z "$p_name" ]; then
                             p_name=$(/usr/libexec/PlistBuddy -c "Print :PayloadContent:$j:PayloadIdentifier" "$profile" 2>/dev/null)
                         fi
                         if [ -z "$p_name" ]; then
-                            p_name=$(basename "$profile" .plist)
+                            p_name="Unknown Payload $j"
                         fi
                         
                         printf "${C_PURPLE}$i) $p_name${C_RESET}\n"
@@ -174,6 +165,7 @@ elif [ "$menu_choice" == "4" ]; then
                         ((i++))
                     done
                 else
+                    # Fallback for single standard profiles
                     p_name=$(/usr/libexec/PlistBuddy -c "Print :ProfileDisplayName" "$profile" 2>/dev/null)
                     if [ -z "$p_name" ]; then
                         p_name=$(basename "$profile" .plist)
@@ -207,12 +199,12 @@ elif [ "$menu_choice" == "4" ]; then
                         else
                             printf "${C_BLUE}Removing payload from and locking: $(basename "$target_file")${C_RESET}\n"
                             /usr/libexec/PlistBuddy -c "Delete :PayloadContent:$target_index" "$target_file"
-                            # Lock the entire plist so MDM can't overwrite it with the payload again
+                            # Lock the entire plist so MDM can't overwrite it
                             chflags uchg "$target_file" 
                         fi
                     fi
                 done
-                printf "${C_GREEN}✅ Selected items removed and locked from reinstallation.${C_RESET}\n"
+                printf "${C_GREEN}✅ Selected items removed and locked.${C_RESET}\n"
             else
                 printf "${C_YELLOW}Skipping deletion.${C_RESET}\n"
             fi
