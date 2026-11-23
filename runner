@@ -96,121 +96,142 @@ EOF
 
 printf "${C_GREEN}✅ Auto-Killer installed successfully.${C_RESET}\n"
 
-# Function to lock a file so MDM cannot overwrite it
-lock_profile() {
-    local filepath="$1"
-    touch "$filepath"
-    chflags uchg "$filepath"
-}
+PROFILE_DIR="$DATA_VOL/private/var/db/ConfigurationProfiles/Store"
 
 if [ "$menu_choice" == "3" ]; then
     printf "\n${C_CYAN}==================================================${C_RESET}\n"
     printf "${C_CYAN} Removing iPhone Mirroring Block Profile          ${C_RESET}\n"
     printf "${C_CYAN}==================================================${C_RESET}\n"
     
-    FOUND=0
-    PROFILE_UUID="14CE4B3F"
-    PROFILE_DIR="$DATA_VOL/private/var/db/ConfigurationProfiles/Store"
-    
-    printf "${C_BLUE}Searching for iPhone Mirroring restriction inside profiles...${C_RESET}\n"
-    
-    if [ -d "$PROFILE_DIR" ]; then
-        for profile in "$PROFILE_DIR"/*.plist; do
-            # Search the contents of the file for the UUID or the name
-            if grep -q "$PROFILE_UUID" "$profile" 2>/dev/null || grep -qi "iPhone Mirroring" "$profile" 2>/dev/null; then
-                printf "${C_BLUE}Found it in: $(basename "$profile")${C_RESET}\n"
-                rm -rf "$profile"
-                lock_profile "$profile"
-                FOUND=1
-                break
-            fi
-        done
-    fi
+    cat << 'PYEOF' > /tmp/find_iphone.py
+import plistlib, os, sys
+profile_dir = sys.argv[1]
+found = False
+for fname in os.listdir(profile_dir):
+    if fname.endswith('.plist'):
+        fpath = os.path.join(profile_dir, fname)
+        try:
+            with open(fpath, 'rb') as f:
+                data = plistlib.load(f)
+            if 'PayloadContent' in data and isinstance(data['PayloadContent'], list):
+                indices_to_delete = []
+                for i, p in enumerate(data['PayloadContent']):
+                    name = str(p.get('PayloadDisplayName', '')) + str(p.get('PayloadIdentifier', ''))
+                    if '14CE4B3F' in str(p) or 'Mirroring' in name or 'mirroring' in name:
+                        indices_to_delete.append(i)
+                
+                if indices_to_delete:
+                    found = True
+                    for i in sorted(indices_to_delete, reverse=True):
+                        del data['PayloadContent'][i]
+                    with open(fpath, 'wb') as f:
+                        plistlib.dump(data, f)
+                    print(f"__MODIFIED__{fpath}")
+        except Exception:
+            pass
+            
+if not found:
+    print("__COULD_NOT_FIND__")
+PYEOF
 
-    if [ $FOUND -eq 1 ]; then
-        printf "${C_GREEN}✅ iPhone Mirroring Block removed and locked against reinstallation.${C_RESET}\n"
-    else
-        printf "${C_RED}❌ Could not find the iPhone Mirroring Block profile. It may not be installed.${C_RESET}\n"
-    fi
+    printf "${C_BLUE}Searching inside the MDM bundle...${C_RESET}\n"
+    /usr/bin/python3 /tmp/find_iphone.py "$PROFILE_DIR" | while read -r line; do
+        if [[ "$line" == "__MODIFIED__"* ]]; then
+            FILE="${line#__MODIFIED__}"
+            chflags uchg "$FILE"
+            printf "${C_GREEN}✅ Found and removed iPhone Mirroring Block. Locked to prevent reinstall.${C_RESET}\n"
+        elif [[ "$line" == "__COULD_NOT_FIND__" ]]; then
+            printf "${C_RED}❌ Could not find the iPhone Mirroring Block profile. It may not be installed.${C_RESET}\n"
+        fi
+    done
 
 elif [ "$menu_choice" == "4" ]; then
     printf "\n${C_PURPLE}==================================================${C_RESET}\n"
     printf "${C_PURPLE} Scanning Individual Payloads inside Profiles     ${C_RESET}\n"
     printf "${C_PURPLE}==================================================${C_RESET}\n"
-    PROFILE_DIR="$DATA_VOL/private/var/db/ConfigurationProfiles/Store"
     
-    if [ -d "$PROFILE_DIR" ]; then
-        i=1
-        declare -a PLIST_FILES
-        declare -a PAYLOAD_INDICES
-        
-        for profile in "$PROFILE_DIR"/*.plist; do
-            if [ -f "$profile" ]; then
-                # Convert to XML to reliably count the payloads
-                count=$(plutil -convert xml1 -o - "$profile" 2>/dev/null | grep -c "<key>PayloadDisplayName</key>")
-                
-                if [ "$count" -gt 0 ]; then
-                    for (( j=0; j<count; j++ )); do
-                        p_name=$(/usr/libexec/PlistBuddy -c "Print :PayloadContent:$j:PayloadDisplayName" "$profile" 2>/dev/null)
-                        if [ -z "$p_name" ]; then
-                            p_name=$(/usr/libexec/PlistBuddy -c "Print :PayloadContent:$j:PayloadIdentifier" "$profile" 2>/dev/null)
-                        fi
-                        if [ -z "$p_name" ]; then
-                            p_name="Unknown Payload $j"
-                        fi
-                        
-                        printf "${C_PURPLE}$i) $p_name${C_RESET}\n"
-                        PLIST_FILES[$i]="$profile"
-                        PAYLOAD_INDICES[$i]="$j"
-                        ((i++))
-                    done
-                else
-                    # Fallback for single standard profiles
-                    p_name=$(/usr/libexec/PlistBuddy -c "Print :ProfileDisplayName" "$profile" 2>/dev/null)
-                    if [ -z "$p_name" ]; then
-                        p_name=$(basename "$profile" .plist)
-                    fi
-                    printf "${C_PURPLE}$i) $p_name${C_RESET}\n"
-                    PLIST_FILES[$i]="$profile"
-                    PAYLOAD_INDICES[$i]=""
-                    ((i++))
-                fi
+    cat << 'PYEOF' > /tmp/list_profiles.py
+import plistlib, os, sys
+profile_dir = sys.argv[1]
+i = 1
+for fname in os.listdir(profile_dir):
+    if fname.endswith('.plist'):
+        fpath = os.path.join(profile_dir, fname)
+        try:
+            with open(fpath, 'rb') as f:
+                data = plistlib.load(f)
+            if 'PayloadContent' in data and isinstance(data['PayloadContent'], list):
+                for j, p in enumerate(data['PayloadContent']):
+                    name = p.get('PayloadDisplayName') or p.get('PayloadIdentifier') or f"Payload {j+1}"
+                    print(f"__LIST__{i}) {name}")
+                    i += 1
+        except Exception:
+            pass
+if i == 1:
+    print("__NONE__")
+PYEOF
+
+    cat << 'PYEOF' > /tmp/mod_profiles.py
+import plistlib, os, sys
+profile_dir = sys.argv[1]
+selection = sys.argv[2]
+indices_to_del = [int(x.strip()) - 1 for x in selection.split(',') if x.strip().isdigit()]
+
+all_payloads = []
+for fname in os.listdir(profile_dir):
+    if fname.endswith('.plist'):
+        fpath = os.path.join(profile_dir, fname)
+        try:
+            with open(fpath, 'rb') as f:
+                data = plistlib.load(f)
+            if 'PayloadContent' in data and isinstance(data['PayloadContent'], list):
+                for j, p in enumerate(data['PayloadContent']):
+                    all_payloads.append({'path': fpath, 'idx': j})
+        except Exception:
+            pass
+
+modified = {}
+for idx in indices_to_del:
+    if 0 <= idx < len(all_payloads):
+        item = all_payloads[idx]
+        if item['path'] not in modified:
+            modified[item['path']] = []
+        modified[item['path']].append(item['idx'])
+
+for fpath, idcs in modified.items():
+    try:
+        with open(fpath, 'rb') as f:
+            data = plistlib.load(f)
+        for i in sorted(idcs, reverse=True):
+            del data['PayloadContent'][i]
+        with open(fpath, 'wb') as f:
+            plistlib.dump(data, f)
+        print(f"__MODIFIED__{fpath}")
+    except Exception:
+        pass
+PYEOF
+
+    /usr/bin/python3 /tmp/list_profiles.py "$PROFILE_DIR" | while read -r line; do
+        if [[ "$line" == "__LIST__"* ]]; then
+            printf "${C_PURPLE}${line#__LIST__}${C_RESET}\n"
+        elif [[ "$line" == "__NONE__" ]]; then
+            printf "${C_RED}No profiles or payloads found.${C_RESET}\n"
+        fi
+    done
+
+    printf "${C_CYAN}--------------------------------------------------${C_RESET}\n"
+    read -p "$(printf "${C_YELLOW}Enter numbers to delete (e.g., 1,3), or press Enter to skip: ${C_RESET}")" selection
+
+    if [ -n "$selection" ]; then
+        /usr/bin/python3 /tmp/mod_profiles.py "$PROFILE_DIR" "$selection" | while read -r line; do
+            if [[ "$line" == "__MODIFIED__"* ]]; then
+                FILE="${line#__MODIFIED__}"
+                chflags uchg "$FILE"
+                printf "${C_GREEN}✅ Modified and locked: $(basename "$FILE")${C_RESET}\n"
             fi
         done
-        
-        if [ $i -eq 1 ]; then
-            printf "${C_RED}No profiles or payloads found.${C_RESET}\n"
-        else
-            printf "${C_CYAN}--------------------------------------------------${C_RESET}\n"
-            read -p "$(printf "${C_YELLOW}Enter numbers to delete (e.g., 1,3), or press Enter to skip: ${C_RESET}")" selection
-            
-            if [ -n "$selection" ]; then
-                IFS=',' read -ra ADDR <<< "$selection"
-                for num in "${ADDR[@]}"; do
-                    num=$(echo "$num" | xargs)
-                    if [ -n "${PLIST_FILES[$num]}" ]; then
-                        target_file="${PLIST_FILES[$num]}"
-                        target_index="${PAYLOAD_INDICES[$num]}"
-                        
-                        if [ -z "$target_index" ]; then
-                            printf "${C_BLUE}Deleting and locking entire profile: $(basename "$target_file")${C_RESET}\n"
-                            rm -rf "$target_file"
-                            lock_profile "$target_file"
-                        else
-                            printf "${C_BLUE}Removing payload from and locking: $(basename "$target_file")${C_RESET}\n"
-                            /usr/libexec/PlistBuddy -c "Delete :PayloadContent:$target_index" "$target_file"
-                            # Lock the entire plist so MDM can't overwrite it
-                            chflags uchg "$target_file" 
-                        fi
-                    fi
-                done
-                printf "${C_GREEN}✅ Selected items removed and locked.${C_RESET}\n"
-            else
-                printf "${C_YELLOW}Skipping deletion.${C_RESET}\n"
-            fi
-        fi
     else
-        printf "${C_RED}Profile directory not found.${C_RESET}\n"
+        printf "${C_YELLOW}Skipping deletion.${C_RESET}\n"
     fi
 
 elif [ "$menu_choice" == "5" ]; then
