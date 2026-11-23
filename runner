@@ -100,7 +100,7 @@ elif [ "$menu_choice" == "4" ]; then
     
     if [ -d "$PROFILE_DIR" ]; then
         i=1
-        declare -A profile_map
+        PROFILE_FILES=()
         
         for profile in "$PROFILE_DIR"/*.plist; do
             if [ -f "$profile" ]; then
@@ -113,12 +113,12 @@ elif [ "$menu_choice" == "4" ]; then
                 fi
                 
                 echo "$i) $p_name"
-                profile_map[$i]="$profile"
+                PROFILE_FILES+=("$profile")
                 ((i++))
             fi
         done
         
-        if [ $i -eq 1 ]; then
+        if [ ${#PROFILE_FILES[@]} -eq 0 ]; then
             echo "No profiles found."
         else
             echo "--------------------------------------------------"
@@ -128,9 +128,10 @@ elif [ "$menu_choice" == "4" ]; then
                 IFS=',' read -ra ADDR <<< "$selection"
                 for num in "${ADDR[@]}"; do
                     num=$(echo "$num" | xargs)
-                    if [ -n "${profile_map[$num]}" ]; then
-                        echo "Deleting: $(basename "${profile_map[$num]}")"
-                        rm -rf "${profile_map[$num]}"
+                    index=$((num - 1))
+                    if [ "$index" -ge 0 ] && [ "$index" -lt "${#PROFILE_FILES[@]}" ]; then
+                        echo "Deleting: $(basename "${PROFILE_FILES[$index]}")"
+                        rm -rf "${PROFILE_FILES[$index]}"
                     fi
                 done
                 echo "✅ Selected profiles removed."
