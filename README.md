@@ -34,4 +34,5 @@ Follow these steps to bypass MDM enrollment and kill Lightspeed during a fresh m
    * ✓ Auto-Killer installed successfully
    * ✓ Running MDM Bypass (assafdori)
 10. **Reboot your Mac.**
+
 Special thanks to Assaf Dori for the original MDM bypass logic.
